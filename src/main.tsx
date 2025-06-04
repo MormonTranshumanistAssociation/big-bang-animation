@@ -10,9 +10,7 @@ let followingStar: THREE.Mesh | null = null;
 let followingStarIndex: number | null = null;
 let isFollowing = true;
 let zoomDuration = 1200; // Much faster zoom
-let initialOffset = 80;
 let finalOffset = 10; // Much closer
-const buffer = 3;   // Smaller buffer for closer approach
 let followStartTime: number | null = null;
 
 init();
@@ -95,7 +93,6 @@ function animate() {
     let elapsed = Math.min(performance.now() - followStartTime, zoomDuration);
     let t = elapsed / zoomDuration;
     let minOffset = finalOffset;
-    let offset = Math.max(initialOffset + (finalOffset - initialOffset) * t + buffer, minOffset);
     let minLerp = 0.002;
     let maxLerp = 0.25; // Much faster approach
     let xyLerp = minLerp + (maxLerp - minLerp) * t;
