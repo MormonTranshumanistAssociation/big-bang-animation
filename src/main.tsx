@@ -3,15 +3,15 @@ import * as THREE from 'three';
 // Remove React-specific code, use this file as the animation entry point
 
 let scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THREE.WebGLRenderer;
-let stars: THREE.Mesh[] = [], velocities: THREE.Vector3[] = [];
-const STAR_COUNT = 5000;
+let starMeshes: THREE.Mesh[] = [], starVelocities: THREE.Vector3[] = [];
+const TOTAL_STAR_COUNT = 5000;
 
-let followingStar: THREE.Mesh | null = null;
-let followingStarIndex: number | null = null;
-let isFollowing = true;
-let zoomDuration = 1200; // Much faster zoom
-let finalOffset = 1; // Much closer
-let followStartTime: number | null = null;
+let starToFollow: THREE.Mesh | null = null;
+let starToFollowIndex: number | null = null;
+let shouldFollowStar = true;
+let cameraZoomDurationMs = 1200; // Duration for camera to zoom in (ms)
+let cameraFinalOffsetZ = 1; // Final Z offset between camera and star
+let cameraFollowStartTime: number | null = null;
 
 // Create a subtle white-tint color ramp function for the shader
 const subtleWhiteTintRamp = `
@@ -50,10 +50,10 @@ function init() {
   document.body.appendChild(renderer.domElement);
 
   // Create stars
-  for (let i = 0; i < STAR_COUNT; i++) {
+  for (let i = 0; i < TOTAL_STAR_COUNT; i++) {
     // Use a small plane for each star
-    const geometry = new THREE.PlaneGeometry(2.2, 2.2); // Smaller, flat
-    const material = new THREE.ShaderMaterial({
+    const starGeometry = new THREE.PlaneGeometry(2.2, 2.2); // Smaller, flat
+    const starMaterial = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
       uniforms: {
@@ -86,50 +86,50 @@ function init() {
         }
       `
     });
-    const star = new THREE.Mesh(geometry, material);
+    const starMesh = new THREE.Mesh(starGeometry, starMaterial);
     // Start at center
-    star.position.set(0, 0, 0);
-    scene.add(star);
-    stars.push(star);
-    // Give each star a random velocity vector
+    starMesh.position.set(0, 0, 0);
+    scene.add(starMesh);
+    starMeshes.push(starMesh);
+    // Give each star a random velocity vector (spherical coordinates)
     const theta = Math.random() * 2 * Math.PI;
     const phi = Math.acos(2 * Math.random() - 1);
     const speed = 1 + Math.random() * 2;
-    velocities.push(new THREE.Vector3(
+    starVelocities.push(new THREE.Vector3(
       Math.sin(phi) * Math.cos(theta) * speed,
       Math.sin(phi) * Math.sin(theta) * speed,
       Math.cos(phi) * speed
     ));
   }
 
-  // Find the fastest star moving toward the camera (high z, low x/y)
-  const minZ = 0.5; // Require a minimum z velocity
-  let bestIndex = -1;
-  let bestZ = minZ;
-  for (let i = 0; i < velocities.length; i++) {
-    const v = velocities[i];
-    if (v.z > bestZ && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5) {
-      bestZ = v.z;
-      bestIndex = i;
+  // Find the fastest star moving toward the camera (high z velocity, low x/y velocity)
+  const minZVelocity = 0.5; // Require a minimum z velocity
+  let bestCandidateIndex = -1;
+  let bestZVelocity = minZVelocity;
+  for (let i = 0; i < starVelocities.length; i++) {
+    const velocity = starVelocities[i];
+    if (velocity.z > bestZVelocity && Math.abs(velocity.x) < 0.5 && Math.abs(velocity.y) < 0.5) {
+      bestZVelocity = velocity.z;
+      bestCandidateIndex = i;
     }
   }
-  if (bestIndex !== -1) {
-    followingStarIndex = bestIndex;
+  if (bestCandidateIndex !== -1) {
+    starToFollowIndex = bestCandidateIndex;
   } else {
     // fallback: pick any star with v.z > 0
-    for (let i = 0; i < velocities.length; i++) {
-      if (velocities[i].z > 0) {
-        followingStarIndex = i;
+    for (let i = 0; i < starVelocities.length; i++) {
+      if (starVelocities[i].z > 0) {
+        starToFollowIndex = i;
         break;
       }
     }
-    if (followingStarIndex === null) {
-      followingStarIndex = 0; // fallback to first star
+    if (starToFollowIndex === null) {
+      starToFollowIndex = 0; // fallback to first star
     }
   }
-  followingStar = stars[followingStarIndex];
+  starToFollow = starMeshes[starToFollowIndex];
 
-  followStartTime = performance.now();
+  cameraFollowStartTime = performance.now();
 
   window.addEventListener('resize', onWindowResize, false);
 }
@@ -138,36 +138,36 @@ function animate() {
   requestAnimationFrame(animate);
 
   // Animate stars outward
-  for (let i = 0; i < stars.length; i++) {
-    stars[i].position.add(velocities[i]);
+  for (let i = 0; i < starMeshes.length; i++) {
+    starMeshes[i].position.add(starVelocities[i]);
   }
 
-  // Camera logic
-  if (isFollowing && followingStar && followingStarIndex !== null && followStartTime !== null) {
-    let elapsed = Math.min(performance.now() - followStartTime, zoomDuration);
-    let t = elapsed / zoomDuration;
-    let minOffset = finalOffset;
+  // Camera logic: smoothly follow the chosen star
+  if (shouldFollowStar && starToFollow && starToFollowIndex !== null && cameraFollowStartTime !== null) {
+    let elapsedMs = Math.min(performance.now() - cameraFollowStartTime, cameraZoomDurationMs);
+    let t = elapsedMs / cameraZoomDurationMs;
+    let minOffsetZ = cameraFinalOffsetZ;
     let minLerp = 0.002;
     let maxLerp = 0.25; // Much faster approach
     let xyLerp = minLerp + (maxLerp - minLerp) * t;
     xyLerp = Math.min(xyLerp, 0.08); // Clamp to prevent abrupt snap
-    camera.position.x += (followingStar.position.x - camera.position.x) * xyLerp;
-    camera.position.y += (followingStar.position.y - camera.position.y) * xyLerp;
+    camera.position.x += (starToFollow.position.x - camera.position.x) * xyLerp;
+    camera.position.y += (starToFollow.position.y - camera.position.y) * xyLerp;
     let lerp = xyLerp;
     let cameraZ = camera.position.z;
-    let starZ = followingStar.position.z;
-    let starVZ = velocities[followingStarIndex].z;
+    let starZ = starToFollow.position.z;
+    let starVelocityZ = starVelocities[starToFollowIndex].z;
     let epsilon = 0.01;
-    let targetZ = starZ + minOffset;
+    let targetZ = starZ + minOffsetZ;
     // Estimate frames to reach within epsilon of the offset
-    let n = Math.log(epsilon / Math.abs(targetZ - cameraZ)) / Math.log(1 - lerp);
-    if (!isFinite(n) || n < 0) n = 0; // fallback for edge cases
+    let nFramesToEpsilon = Math.log(epsilon / Math.abs(targetZ - cameraZ)) / Math.log(1 - lerp);
+    if (!isFinite(nFramesToEpsilon) || nFramesToEpsilon < 0) nFramesToEpsilon = 0; // fallback for edge cases
     const maxPredictionFrames = 15; // Much shorter prediction horizon
-    n = Math.min(n, maxPredictionFrames);
-    let predictedStarZ = starZ + starVZ * n;
-    let predictiveTargetZ = predictedStarZ + minOffset;
+    nFramesToEpsilon = Math.min(nFramesToEpsilon, maxPredictionFrames);
+    let predictedStarZ = starZ + starVelocityZ * nFramesToEpsilon;
+    let predictiveTargetZ = predictedStarZ + minOffsetZ;
     camera.position.z += (predictiveTargetZ - camera.position.z) * lerp;
-    camera.lookAt(followingStar.position);
+    camera.lookAt(starToFollow.position);
   }
 
   renderer.render(scene, camera);
