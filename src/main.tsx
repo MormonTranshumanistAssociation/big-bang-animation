@@ -10,7 +10,7 @@ let starToFollow: THREE.Mesh | null = null;
 let starToFollowIndex: number | null = null;
 let shouldFollowStar = true;
 let cameraZoomDurationMs = 1200; // Duration for camera to zoom in (ms)
-let cameraFinalOffsetZ = 1; // Final Z offset between camera and star
+let cameraFinalOffsetZ = 0.00004; // Zoom in as close as possible
 let cameraFollowStartTime: number | null = null;
 
 // Create a subtle white-tint color ramp function for the shader
@@ -39,7 +39,7 @@ const subtleWhiteTintRamp = `
 // --- PLANET & MOON SYSTEM ---
 let planetMesh: THREE.Mesh, moonMesh: THREE.Mesh;
 let planetDistanceFromStar = 18; // visually reasonable, not to scale
-let moonDistanceFromPlanet = 10; // much further out for visual clarity
+let moonDistanceFromPlanet = 4.5; // closer to the planet
 let moonOrbitSpeed = 0.08; // radians per second, very slow
 let moonOrbitAngle = 0;
 let starLight: THREE.PointLight;
@@ -48,7 +48,7 @@ let fillLight: THREE.DirectionalLight;
 
 function createPlanetarySystem() {
   // Earth-like planet
-  const planetGeometry = new THREE.SphereGeometry(2.2, 32, 32);
+  const planetGeometry = new THREE.SphereGeometry(0.5, 32, 32);
   const planetMaterial = new THREE.MeshPhongMaterial({
     color: 0x3a6ea5, // blue-ish
     specular: 0x222222,
@@ -59,7 +59,7 @@ function createPlanetarySystem() {
   scene.add(planetMesh);
 
   // Moon
-  const moonGeometry = new THREE.SphereGeometry(0.6, 24, 24);
+  const moonGeometry = new THREE.SphereGeometry(0.13, 24, 24);
   const moonMaterial = new THREE.MeshPhongMaterial({
     color: 0xbababa,
     specular: 0x111111,
@@ -88,7 +88,7 @@ animate();
 
 function init() {
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+  camera = new THREE.PerspectiveCamera(10, window.innerWidth / window.innerHeight, 0.1, 2000); // extremely narrow FOV for maximum planet size
   camera.position.z = 400;
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -120,14 +120,14 @@ function init() {
         ${subtleWhiteTintRamp}
         void main() {
           float dist = length(vUv) * 2.0;
-          float core = smoothstep(0.35, 0.18, dist); // sharper core
-          float glow = exp(-dist * glowStrength) * 1.1;
+          float core = smoothstep(0.22, 0.10, dist); // much sharper core
+          float glow = exp(-dist * (glowStrength * 1.5)) * 0.8; // tighter, less diffuse
           float t = clamp(dist, 0.0, 1.0);
           vec3 color = subtleWhiteTint(t, colorShift);
-          // Blend core and glow more smoothly
-          float blend = smoothstep(0.0, 0.7, 1.0 - dist);
+          // Blend core and glow more tightly
+          float blend = smoothstep(0.0, 0.45, 1.0 - dist);
           vec3 finalColor = mix(color * glow, color, blend);
-          float alpha = max(core, glow * 0.7);
+          float alpha = max(core, glow * 0.5);
           gl_FragColor = vec4(finalColor, alpha);
         }
       `
@@ -152,9 +152,13 @@ function init() {
   const minZVelocity = 0.5; // Require a minimum z velocity
   let bestCandidateIndex = -1;
   let bestZVelocity = minZVelocity;
+  const minXVelocity = 0.1;
+  const minYVelocity = 0.1;
+  const maxXVelocity = 0.2;
+  const maxYVelocity = 0.2;
   for (let i = 0; i < starVelocities.length; i++) {
     const velocity = starVelocities[i];
-    if (velocity.z > bestZVelocity && Math.abs(velocity.x) > 0.4 && Math.abs(velocity.x) < 0.5 && Math.abs(velocity.y) > 0.4 && Math.abs(velocity.y) < 0.5) {
+    if (velocity.z > bestZVelocity && Math.abs(velocity.x) > minXVelocity && Math.abs(velocity.x) < maxXVelocity && Math.abs(velocity.y) > minYVelocity && Math.abs(velocity.y) < maxYVelocity) {
       bestZVelocity = velocity.z;
       bestCandidateIndex = i;
     }
@@ -200,12 +204,19 @@ function animate() {
     const planetPos = starPos.clone().add(starVel.clone().multiplyScalar(planetDistanceFromStar)).add(sideOffset);
     planetMesh.position.copy(planetPos);
 
-    // Place moon in orbit around the planet
+    // --- Moon orbit plane logic ---
+    // The moon's orbit plane is perpendicular to the star's velocity cross the global Z axis
+    // This makes the moon's orbit parallel to the planet's orbital plane
+    const orbitNormal = new THREE.Vector3().crossVectors(starVel, new THREE.Vector3(0, 0, 1)).normalize();
+    // Find two orthogonal vectors in the orbit plane
+    let moonOrbitX = new THREE.Vector3().crossVectors(orbitNormal, starVel).normalize();
+    let moonOrbitY = new THREE.Vector3().crossVectors(orbitNormal, moonOrbitX).normalize();
+    // Parametric equation for the moon's position in the orbit plane
     moonOrbitAngle += moonOrbitSpeed * (1/60); // assuming ~60fps
-    const moonX = planetPos.x + Math.cos(moonOrbitAngle) * moonDistanceFromPlanet;
-    const moonY = planetPos.y + Math.sin(moonOrbitAngle) * moonDistanceFromPlanet;
-    const moonZ = planetPos.z;
-    moonMesh.position.set(moonX, moonY, moonZ);
+    const moonOffset = moonOrbitX.clone().multiplyScalar(Math.cos(moonOrbitAngle) * moonDistanceFromPlanet)
+      .add(moonOrbitY.clone().multiplyScalar(Math.sin(moonOrbitAngle) * moonDistanceFromPlanet));
+    const moonPos = planetPos.clone().add(moonOffset);
+    moonMesh.position.copy(moonPos);
 
     // Move the light to the star's position
     starLight.position.copy(starPos);
