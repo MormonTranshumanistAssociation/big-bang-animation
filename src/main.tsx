@@ -9,7 +9,7 @@ const TOTAL_STAR_COUNT = 5000;
 let starToFollow: THREE.Mesh | null = null;
 let starToFollowIndex: number | null = null;
 let shouldFollowStar = true;
-let cameraZoomDurationMs = 1200; // Duration for camera to zoom in (ms)
+let cameraZoomDurationMs = 4000; // Duration for camera to zoom in (ms)
 let cameraFinalOffsetZ = 10; // Zoom in as close as possible
 let cameraFollowStartTime: number | null = null;
 let animationStartTime: number | null = null;
@@ -284,7 +284,8 @@ function animate() {
   if (shouldFollowStar && planetMesh && starToFollow && starToFollowIndex !== null && cameraFollowStartTime !== null && initialLookTarget) {
     let elapsedMs = Math.min(performance.now() - cameraFollowStartTime, cameraZoomDurationMs);
     let t = elapsedMs / cameraZoomDurationMs;
-    t = customEase(t); // apply slower ease-in and smooth ease-out
+    // Use a quartic ease-in for a much slower start
+    t = Math.pow(t, 4);
     let minOffsetZ = cameraFinalOffsetZ;
     let minLerp = 0.002;
     let maxLerp = 0.25;
@@ -301,12 +302,14 @@ function animate() {
     let camTargetPos = starPos.clone().lerp(planetPos, 1.18); // 1.18 puts camera just beyond the planet
 
     // --- TIME-BASED LANDING LOGIC ---
-    const landingDurationMs = 400;
+    const landingDurationMs = 1500;
     const landingStartMs = cameraZoomDurationMs - landingDurationMs;
     if (elapsedMs >= landingStartMs) {
       // Landing phase
       let landingT = (elapsedMs - landingStartMs) / landingDurationMs;
       landingT = Math.min(Math.max(landingT, 0), 1);
+      // Apply 10th-power ease-out for maximum dramatic deceleration
+      landingT = 1 - Math.pow(1 - landingT, 10);
       const planetRadius = 0.5;
       const landingOffset = planetRadius * 6.0;
       if (!landingStarted) {
