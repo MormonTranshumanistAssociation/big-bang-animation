@@ -14,9 +14,15 @@ let cameraFinalOffsetZ = 10; // Zoom in as close as possible
 let cameraFollowStartTime: number | null = null;
 let animationStartTime: number | null = null;
 let initialLookTarget: THREE.Vector3 | null = null;
+let planetFinalDestination: THREE.Vector3 | null = null;
+let starInitialVelocity: THREE.Vector3 | null = null;
+let landingStartCameraPos: THREE.Vector3 | null = null;
+let landingStartPlanetPos: THREE.Vector3 | null = null;
+let landingTargetPos: THREE.Vector3 | null = null;
+let landingStarted = false;
 
 // Delay before starting camera zoom (ms)
-const CAMERA_ZOOM_DELAY_MS = 2000;
+const CAMERA_ZOOM_DELAY_MS = 1000;
 
 // Create a subtle white-tint color ramp function for the shader
 const subtleWhiteTintRamp = `
@@ -125,7 +131,7 @@ function init() {
   // Create stars
   for (let i = 0; i < TOTAL_STAR_COUNT; i++) {
     // Use a small plane for each star
-    const starGeometry = new THREE.PlaneGeometry(2.2, 2.2); // Smaller, flat
+    const starGeometry = new THREE.PlaneGeometry(1.5, 1.5); // Much smaller, more pinprick-like
     const starMaterial = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -147,8 +153,8 @@ function init() {
         ${subtleWhiteTintRamp}
         void main() {
           float dist = length(vUv) * 2.0;
-          float core = smoothstep(0.22, 0.10, dist); // much sharper core
-          float glow = exp(-dist * (glowStrength * 1.5)) * 0.8; // tighter, less diffuse
+          float core = smoothstep(0.13, 0.07, dist); // even sharper core
+          float glow = exp(-dist * (glowStrength * 1.7)) * 0.7; // tighter, less diffuse
           float t = clamp(dist, 0.0, 1.0);
           vec3 color = subtleWhiteTint(t, colorShift);
           // Blend core and glow more tightly
@@ -201,6 +207,11 @@ function init() {
     }
   }
   starToFollow = starMeshes[starToFollowIndex];
+  // Store the initial velocity of the star to follow
+  starInitialVelocity = starVelocities[starToFollowIndex].clone().normalize();
+  // Precompute the planet's final destination (from the origin)
+  const sideOffset = new THREE.Vector3().crossVectors(starInitialVelocity, new THREE.Vector3(0, 0, 1)).normalize().multiplyScalar(3);
+  planetFinalDestination = starInitialVelocity.clone().multiplyScalar(planetDistanceFromStar).add(sideOffset);
 
   animationStartTime = performance.now();
   cameraFollowStartTime = null; // Will be set after delay
@@ -220,38 +231,36 @@ function animate() {
 
   // --- PLANET & MOON SYSTEM ---
   if (starToFollow && starToFollowIndex !== null) {
-    // Place planet at a fixed offset from the star, along the star's velocity direction
-    const starPos = starToFollow.position;
-    const starVel = starVelocities[starToFollowIndex].clone().normalize();
-    // Offset planet slightly to the side so the star's light isn't directly behind it
-    const sideOffset = new THREE.Vector3().crossVectors(starVel, new THREE.Vector3(0, 0, 1)).normalize().multiplyScalar(3);
-    // --- Planet position logic ---
-    let planetPos: THREE.Vector3;
-    if (animationStartTime !== null && performance.now() - animationStartTime < CAMERA_ZOOM_DELAY_MS) {
-      // Before explosion delay, keep planet at origin
-      planetPos = new THREE.Vector3(0, 0, 0);
-    } else {
-      // After delay, move to offset position
-      planetPos = starPos.clone().add(starVel.clone().multiplyScalar(planetDistanceFromStar)).add(sideOffset);
+    // Move the planet in a straight line from the origin to its final destination
+    let planetT = 0;
+    if (animationStartTime !== null) {
+      let elapsedMs = performance.now() - animationStartTime;
+      planetT = Math.min(elapsedMs / cameraZoomDurationMs, 1);
+      planetT = customEase(planetT);
     }
-    planetMesh.position.copy(planetPos);
+    if (planetFinalDestination) {
+      let planetPos = new THREE.Vector3(0, 0, 0).lerp(planetFinalDestination, planetT);
+      planetMesh.position.copy(planetPos);
+    }
 
     // --- Moon orbit plane logic ---
     // The moon's orbit plane is perpendicular to the star's velocity cross the global Z axis
     // This makes the moon's orbit parallel to the planet's orbital plane
-    const orbitNormal = new THREE.Vector3().crossVectors(starVel, new THREE.Vector3(0, 0, 1)).normalize();
-    // Find two orthogonal vectors in the orbit plane
-    let moonOrbitX = new THREE.Vector3().crossVectors(orbitNormal, starVel).normalize();
-    let moonOrbitY = new THREE.Vector3().crossVectors(orbitNormal, moonOrbitX).normalize();
-    // Parametric equation for the moon's position in the orbit plane
-    moonOrbitAngle += moonOrbitSpeed * (1/60); // assuming ~60fps
-    const moonOffset = moonOrbitX.clone().multiplyScalar(Math.cos(moonOrbitAngle) * moonDistanceFromPlanet)
-      .add(moonOrbitY.clone().multiplyScalar(Math.sin(moonOrbitAngle) * moonDistanceFromPlanet));
-    const moonPos = planetPos.clone().add(moonOffset);
-    moonMesh.position.copy(moonPos);
+    if (starInitialVelocity) {
+      const orbitNormal = new THREE.Vector3().crossVectors(starInitialVelocity, new THREE.Vector3(0, 0, 1)).normalize();
+      // Find two orthogonal vectors in the orbit plane
+      let moonOrbitX = new THREE.Vector3().crossVectors(orbitNormal, starInitialVelocity).normalize();
+      let moonOrbitY = new THREE.Vector3().crossVectors(orbitNormal, moonOrbitX).normalize();
+      // Parametric equation for the moon's position in the orbit plane
+      moonOrbitAngle += moonOrbitSpeed * (1/60); // assuming ~60fps
+      const moonOffset = moonOrbitX.clone().multiplyScalar(Math.cos(moonOrbitAngle) * moonDistanceFromPlanet)
+        .add(moonOrbitY.clone().multiplyScalar(Math.sin(moonOrbitAngle) * moonDistanceFromPlanet));
+      const moonPos = planetMesh.position.clone().add(moonOffset);
+      moonMesh.position.copy(moonPos);
+    }
 
     // Move the light to the star's position
-    starLight.position.copy(starPos);
+    starLight.position.copy(starToFollow.position);
   }
 
   // --- CAMERA LOGIC: follow the planet, keep star in view ---
@@ -290,24 +299,57 @@ function animate() {
     let lookTarget = initialLookTarget.clone().lerp(planetPos, lookTargetLerpT);
     // Camera position: between star and planet, but closer to planet
     let camTargetPos = starPos.clone().lerp(planetPos, 1.18); // 1.18 puts camera just beyond the planet
-    // Smoothly interpolate camera position
-    camera.position.x += (camTargetPos.x - camera.position.x) * xyLerp;
-    camera.position.y += (camTargetPos.y - camera.position.y) * xyLerp;
-    // Z logic: predict planet's Z like before
-    let lerp = xyLerp;
-    let cameraZ = camera.position.z;
-    let planetZ = planetPos.z;
-    let planetVelZ = starVelocities[starToFollowIndex].z; // planet moves with star
-    let epsilon = 0.01;
-    let targetZ = planetZ + minOffsetZ;
-    let nFramesToEpsilon = Math.log(epsilon / Math.abs(targetZ - cameraZ)) / Math.log(1 - lerp);
-    if (!isFinite(nFramesToEpsilon) || nFramesToEpsilon < 0) nFramesToEpsilon = 0;
-    const maxPredictionFrames = 15;
-    nFramesToEpsilon = Math.min(nFramesToEpsilon, maxPredictionFrames);
-    let predictedPlanetZ = planetZ + planetVelZ * nFramesToEpsilon;
-    let predictiveTargetZ = predictedPlanetZ + minOffsetZ;
-    camera.position.z += (predictiveTargetZ - camera.position.z) * lerp;
-    camera.lookAt(lookTarget);
+
+    // --- TIME-BASED LANDING LOGIC ---
+    const landingDurationMs = 400;
+    const landingStartMs = cameraZoomDurationMs - landingDurationMs;
+    if (elapsedMs >= landingStartMs) {
+      // Landing phase
+      let landingT = (elapsedMs - landingStartMs) / landingDurationMs;
+      landingT = Math.min(Math.max(landingT, 0), 1);
+      const planetRadius = 0.5;
+      const landingOffset = planetRadius * 6.0;
+      if (!landingStarted) {
+        // Store camera and direction at the start of landing
+        landingStartCameraPos = camera.position.clone();
+        let landingDir = planetPos.clone().sub(camera.position).normalize();
+        landingTargetPos = landingDir; // Store the direction only
+        landingStarted = true;
+      }
+      if (landingStartCameraPos && landingTargetPos) {
+        if (landingT < 1) {
+          // Recompute the landing target every frame using the current planet position and the original direction
+          let currentLandingTarget = planetPos.clone().sub(landingTargetPos.clone().multiplyScalar(landingOffset));
+          camera.position.copy(landingStartCameraPos.clone().lerp(currentLandingTarget, landingT));
+          camera.lookAt(planetPos);
+        } else {
+          // After landing, stick the camera to just in front of the moving planet
+          let currentLandingTarget = planetPos.clone().sub(landingTargetPos.clone().multiplyScalar(landingOffset));
+          camera.position.copy(currentLandingTarget);
+          camera.lookAt(planetPos);
+        }
+      }
+    } else {
+      landingStarted = false;
+      // Cinematic phase (before landing)
+      camera.position.x += (camTargetPos.x - camera.position.x) * xyLerp;
+      camera.position.y += (camTargetPos.y - camera.position.y) * xyLerp;
+      // Z logic: predict planet's Z like before
+      let lerp = xyLerp;
+      let cameraZ = camera.position.z;
+      let planetZ = planetPos.z;
+      let planetVelZ = starVelocities[starToFollowIndex].z; // planet moves with star
+      let epsilon = 0.01;
+      let targetZ = planetZ + minOffsetZ;
+      let nFramesToEpsilon = Math.log(epsilon / Math.abs(targetZ - cameraZ)) / Math.log(1 - lerp);
+      if (!isFinite(nFramesToEpsilon) || nFramesToEpsilon < 0) nFramesToEpsilon = 0;
+      const maxPredictionFrames = 15;
+      nFramesToEpsilon = Math.min(nFramesToEpsilon, maxPredictionFrames);
+      let predictedPlanetZ = planetZ + planetVelZ * nFramesToEpsilon;
+      let predictiveTargetZ = predictedPlanetZ + minOffsetZ;
+      camera.position.z += (predictiveTargetZ - camera.position.z) * lerp;
+      camera.lookAt(lookTarget);
+    }
   }
 
   renderer.render(scene, camera);
