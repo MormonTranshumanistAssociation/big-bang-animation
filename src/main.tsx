@@ -17,7 +17,6 @@ let initialLookTarget: THREE.Vector3 | null = null;
 let planetFinalDestination: THREE.Vector3 | null = null;
 let starInitialVelocity: THREE.Vector3 | null = null;
 let landingStartCameraPos: THREE.Vector3 | null = null;
-let landingStartPlanetPos: THREE.Vector3 | null = null;
 let landingTargetPos: THREE.Vector3 | null = null;
 let landingStarted = false;
 
