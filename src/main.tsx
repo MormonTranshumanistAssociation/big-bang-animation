@@ -10,8 +10,31 @@ let followingStar: THREE.Mesh | null = null;
 let followingStarIndex: number | null = null;
 let isFollowing = true;
 let zoomDuration = 1200; // Much faster zoom
-let finalOffset = 10; // Much closer
+let finalOffset = 1; // Much closer
 let followStartTime: number | null = null;
+
+// Create a subtle white-tint color ramp function for the shader
+const subtleWhiteTintRamp = `
+  vec3 subtleWhiteTint(float t, float shift) {
+    // shift: 0 to 1, controls tint
+    // 0-0.33: blue-white, 0.33-0.66: yellow-white, 0.66-1: pink-white
+    vec3 white = vec3(1.0);
+    vec3 tint;
+    if (shift < 0.33) {
+      // blue-white
+      tint = vec3(0.8, 0.87, 1.0);
+    } else if (shift < 0.66) {
+      // yellow-white
+      tint = vec3(1.0, 0.97, 0.8);
+    } else {
+      // pink-white
+      tint = vec3(1.0, 0.85, 0.95);
+    }
+    // Blend white and tint, more tint at the edge, but always subtle
+    float tintAmount = 0.08 + 0.12 * t; // 8% at center, up to 20% at edge
+    return mix(white, tint, tintAmount);
+  }
+`;
 
 init();
 
@@ -28,15 +51,46 @@ function init() {
 
   // Create stars
   for (let i = 0; i < STAR_COUNT; i++) {
-    const geometry = new THREE.SphereGeometry(1.5, 8, 8);
-    const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    // Use a small plane for each star
+    const geometry = new THREE.PlaneGeometry(2.2, 2.2); // Smaller, flat
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        glowStrength: { value: 2.2 },
+        colorShift: { value: Math.random() },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv - 0.5;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        uniform float glowStrength;
+        uniform float colorShift;
+        ${subtleWhiteTintRamp}
+        void main() {
+          float dist = length(vUv) * 2.0;
+          float core = smoothstep(0.35, 0.18, dist); // sharper core
+          float glow = exp(-dist * glowStrength) * 1.1;
+          float t = clamp(dist, 0.0, 1.0);
+          vec3 color = subtleWhiteTint(t, colorShift);
+          // Blend core and glow more smoothly
+          float blend = smoothstep(0.0, 0.7, 1.0 - dist);
+          vec3 finalColor = mix(color * glow, color, blend);
+          float alpha = max(core, glow * 0.7);
+          gl_FragColor = vec4(finalColor, alpha);
+        }
+      `
+    });
     const star = new THREE.Mesh(geometry, material);
-
     // Start at center
     star.position.set(0, 0, 0);
     scene.add(star);
     stars.push(star);
-
     // Give each star a random velocity vector
     const theta = Math.random() * 2 * Math.PI;
     const phi = Math.acos(2 * Math.random() - 1);
