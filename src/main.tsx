@@ -36,6 +36,52 @@ const subtleWhiteTintRamp = `
   }
 `;
 
+// --- PLANET & MOON SYSTEM ---
+let planetMesh: THREE.Mesh, moonMesh: THREE.Mesh;
+let planetDistanceFromStar = 18; // visually reasonable, not to scale
+let moonDistanceFromPlanet = 10; // much further out for visual clarity
+let moonOrbitSpeed = 0.08; // radians per second, very slow
+let moonOrbitAngle = 0;
+let starLight: THREE.PointLight;
+let ambientLight: THREE.AmbientLight;
+let fillLight: THREE.DirectionalLight;
+
+function createPlanetarySystem() {
+  // Earth-like planet
+  const planetGeometry = new THREE.SphereGeometry(2.2, 32, 32);
+  const planetMaterial = new THREE.MeshPhongMaterial({
+    color: 0x3a6ea5, // blue-ish
+    specular: 0x222222,
+    shininess: 30,
+    flatShading: false
+  });
+  planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
+  scene.add(planetMesh);
+
+  // Moon
+  const moonGeometry = new THREE.SphereGeometry(0.6, 24, 24);
+  const moonMaterial = new THREE.MeshPhongMaterial({
+    color: 0xbababa,
+    specular: 0x111111,
+    shininess: 10
+  });
+  moonMesh = new THREE.Mesh(moonGeometry, moonMaterial);
+  scene.add(moonMesh);
+
+  // Light source at the star
+  starLight = new THREE.PointLight(0xffffff, 10, 0, 2.2); // even brighter
+  scene.add(starLight);
+
+  // Ambient light for soft fill
+  ambientLight = new THREE.AmbientLight(0xffffff, 0.22);
+  scene.add(ambientLight);
+
+  // Directional fill light from above and side
+  fillLight = new THREE.DirectionalLight(0xffffff, 0.55);
+  fillLight.position.set(20, 30, 40);
+  scene.add(fillLight);
+}
+
 init();
 
 animate();
@@ -108,7 +154,7 @@ function init() {
   let bestZVelocity = minZVelocity;
   for (let i = 0; i < starVelocities.length; i++) {
     const velocity = starVelocities[i];
-    if (velocity.z > bestZVelocity && Math.abs(velocity.x) < 0.5 && Math.abs(velocity.y) < 0.5) {
+    if (velocity.z > bestZVelocity && Math.abs(velocity.x) > 0.4 && Math.abs(velocity.x) < 0.5 && Math.abs(velocity.y) > 0.4 && Math.abs(velocity.y) < 0.5) {
       bestZVelocity = velocity.z;
       bestCandidateIndex = i;
     }
@@ -131,6 +177,8 @@ function init() {
 
   cameraFollowStartTime = performance.now();
 
+  createPlanetarySystem();
+
   window.addEventListener('resize', onWindowResize, false);
 }
 
@@ -142,32 +190,62 @@ function animate() {
     starMeshes[i].position.add(starVelocities[i]);
   }
 
-  // Camera logic: smoothly follow the chosen star
-  if (shouldFollowStar && starToFollow && starToFollowIndex !== null && cameraFollowStartTime !== null) {
+  // --- PLANET & MOON SYSTEM ---
+  if (starToFollow && starToFollowIndex !== null) {
+    // Place planet at a fixed offset from the star, along the star's velocity direction
+    const starPos = starToFollow.position;
+    const starVel = starVelocities[starToFollowIndex].clone().normalize();
+    // Offset planet slightly to the side so the star's light isn't directly behind it
+    const sideOffset = new THREE.Vector3().crossVectors(starVel, new THREE.Vector3(0, 0, 1)).normalize().multiplyScalar(3);
+    const planetPos = starPos.clone().add(starVel.clone().multiplyScalar(planetDistanceFromStar)).add(sideOffset);
+    planetMesh.position.copy(planetPos);
+
+    // Place moon in orbit around the planet
+    moonOrbitAngle += moonOrbitSpeed * (1/60); // assuming ~60fps
+    const moonX = planetPos.x + Math.cos(moonOrbitAngle) * moonDistanceFromPlanet;
+    const moonY = planetPos.y + Math.sin(moonOrbitAngle) * moonDistanceFromPlanet;
+    const moonZ = planetPos.z;
+    moonMesh.position.set(moonX, moonY, moonZ);
+
+    // Move the light to the star's position
+    starLight.position.copy(starPos);
+  }
+
+  // --- CAMERA LOGIC: follow the planet, keep star in view ---
+  if (shouldFollowStar && planetMesh && starToFollow && starToFollowIndex !== null && cameraFollowStartTime !== null) {
     let elapsedMs = Math.min(performance.now() - cameraFollowStartTime, cameraZoomDurationMs);
     let t = elapsedMs / cameraZoomDurationMs;
     let minOffsetZ = cameraFinalOffsetZ;
     let minLerp = 0.002;
-    let maxLerp = 0.25; // Much faster approach
+    let maxLerp = 0.25;
     let xyLerp = minLerp + (maxLerp - minLerp) * t;
-    xyLerp = Math.min(xyLerp, 0.08); // Clamp to prevent abrupt snap
-    camera.position.x += (starToFollow.position.x - camera.position.x) * xyLerp;
-    camera.position.y += (starToFollow.position.y - camera.position.y) * xyLerp;
+    xyLerp = Math.min(xyLerp, 0.08);
+    // Camera moves toward the planet, but offset so the star is still visible
+    // Offset: camera looks at planet, but is positioned slightly behind the star, so both are in view
+    const starPos = starToFollow.position;
+    const planetPos = planetMesh.position;
+    // Direction from camera to planet
+    let targetLook = planetPos.clone();
+    // Camera position: between star and planet, but closer to planet
+    let camTargetPos = starPos.clone().lerp(planetPos, 1.18); // 1.18 puts camera just beyond the planet
+    // Smoothly interpolate camera position
+    camera.position.x += (camTargetPos.x - camera.position.x) * xyLerp;
+    camera.position.y += (camTargetPos.y - camera.position.y) * xyLerp;
+    // Z logic: predict planet's Z like before
     let lerp = xyLerp;
     let cameraZ = camera.position.z;
-    let starZ = starToFollow.position.z;
-    let starVelocityZ = starVelocities[starToFollowIndex].z;
+    let planetZ = planetPos.z;
+    let planetVelZ = starVelocities[starToFollowIndex].z; // planet moves with star
     let epsilon = 0.01;
-    let targetZ = starZ + minOffsetZ;
-    // Estimate frames to reach within epsilon of the offset
+    let targetZ = planetZ + minOffsetZ;
     let nFramesToEpsilon = Math.log(epsilon / Math.abs(targetZ - cameraZ)) / Math.log(1 - lerp);
-    if (!isFinite(nFramesToEpsilon) || nFramesToEpsilon < 0) nFramesToEpsilon = 0; // fallback for edge cases
-    const maxPredictionFrames = 15; // Much shorter prediction horizon
+    if (!isFinite(nFramesToEpsilon) || nFramesToEpsilon < 0) nFramesToEpsilon = 0;
+    const maxPredictionFrames = 15;
     nFramesToEpsilon = Math.min(nFramesToEpsilon, maxPredictionFrames);
-    let predictedStarZ = starZ + starVelocityZ * nFramesToEpsilon;
-    let predictiveTargetZ = predictedStarZ + minOffsetZ;
+    let predictedPlanetZ = planetZ + planetVelZ * nFramesToEpsilon;
+    let predictiveTargetZ = predictedPlanetZ + minOffsetZ;
     camera.position.z += (predictiveTargetZ - camera.position.z) * lerp;
-    camera.lookAt(starToFollow.position);
+    camera.lookAt(targetLook);
   }
 
   renderer.render(scene, camera);
