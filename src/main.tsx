@@ -225,7 +225,15 @@ function animate() {
     const starVel = starVelocities[starToFollowIndex].clone().normalize();
     // Offset planet slightly to the side so the star's light isn't directly behind it
     const sideOffset = new THREE.Vector3().crossVectors(starVel, new THREE.Vector3(0, 0, 1)).normalize().multiplyScalar(3);
-    const planetPos = starPos.clone().add(starVel.clone().multiplyScalar(planetDistanceFromStar)).add(sideOffset);
+    // --- Planet position logic ---
+    let planetPos: THREE.Vector3;
+    if (animationStartTime !== null && performance.now() - animationStartTime < CAMERA_ZOOM_DELAY_MS) {
+      // Before explosion delay, keep planet at origin
+      planetPos = new THREE.Vector3(0, 0, 0);
+    } else {
+      // After delay, move to offset position
+      planetPos = starPos.clone().add(starVel.clone().multiplyScalar(planetDistanceFromStar)).add(sideOffset);
+    }
     planetMesh.position.copy(planetPos);
 
     // --- Moon orbit plane logic ---
