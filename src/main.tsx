@@ -10,8 +10,13 @@ let starToFollow: THREE.Mesh | null = null;
 let starToFollowIndex: number | null = null;
 let shouldFollowStar = true;
 let cameraZoomDurationMs = 1200; // Duration for camera to zoom in (ms)
-let cameraFinalOffsetZ = 0.00004; // Zoom in as close as possible
+let cameraFinalOffsetZ = 10; // Zoom in as close as possible
 let cameraFollowStartTime: number | null = null;
+let animationStartTime: number | null = null;
+let initialLookTarget: THREE.Vector3 | null = null;
+
+// Delay before starting camera zoom (ms)
+const CAMERA_ZOOM_DELAY_MS = 2000;
 
 // Create a subtle white-tint color ramp function for the shader
 const subtleWhiteTintRamp = `
@@ -38,13 +43,35 @@ const subtleWhiteTintRamp = `
 
 // --- PLANET & MOON SYSTEM ---
 let planetMesh: THREE.Mesh, moonMesh: THREE.Mesh;
-let planetDistanceFromStar = 18; // visually reasonable, not to scale
+let planetDistanceFromStar = 4.5; // much closer to the star, inside the blast radius
 let moonDistanceFromPlanet = 4.5; // closer to the planet
 let moonOrbitSpeed = 0.08; // radians per second, very slow
 let moonOrbitAngle = 0;
 let starLight: THREE.PointLight;
 let ambientLight: THREE.AmbientLight;
 let fillLight: THREE.DirectionalLight;
+
+// Explosion speed controls
+const STAR_SPEED_MIN = 0.2;
+const STAR_SPEED_MAX = 0.4;
+
+// Easing functions for even slower ease-in
+function easeInCubic(t: number): number {
+  return t * t * t;
+}
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+function customEase(t: number): number {
+  // Slow ease-in, then ease out
+  if (t < 0.6) {
+    // Even slower start
+    return 0.5 * easeInCubic(t / 0.6);
+  } else {
+    // Normal ease out
+    return 0.5 + 0.5 * easeOutCubic((t - 0.6) / 0.4);
+  }
+}
 
 function createPlanetarySystem() {
   // Earth-like planet
@@ -140,7 +167,7 @@ function init() {
     // Give each star a random velocity vector (spherical coordinates)
     const theta = Math.random() * 2 * Math.PI;
     const phi = Math.acos(2 * Math.random() - 1);
-    const speed = 1 + Math.random() * 2;
+    const speed = STAR_SPEED_MIN + Math.random() * (STAR_SPEED_MAX - STAR_SPEED_MIN);
     starVelocities.push(new THREE.Vector3(
       Math.sin(phi) * Math.cos(theta) * speed,
       Math.sin(phi) * Math.sin(theta) * speed,
@@ -148,23 +175,19 @@ function init() {
     ));
   }
 
-  // Find the fastest star moving toward the camera (high z velocity, low x/y velocity)
-  const minZVelocity = 0.5; // Require a minimum z velocity
-  let bestCandidateIndex = -1;
-  let bestZVelocity = minZVelocity;
-  const minXVelocity = 0.1;
-  const minYVelocity = 0.1;
-  const maxXVelocity = 0.2;
-  const maxYVelocity = 0.2;
+  // Find a star with moderate speed, moving toward the camera (z > 0), and not too high x/y velocity
+  let candidateIndices: number[] = [];
   for (let i = 0; i < starVelocities.length; i++) {
-    const velocity = starVelocities[i];
-    if (velocity.z > bestZVelocity && Math.abs(velocity.x) > minXVelocity && Math.abs(velocity.x) < maxXVelocity && Math.abs(velocity.y) > minYVelocity && Math.abs(velocity.y) < maxYVelocity) {
-      bestZVelocity = velocity.z;
-      bestCandidateIndex = i;
+    const v = starVelocities[i];
+    if (v.z > 0.15 && Math.abs(v.x) < 0.25 && Math.abs(v.y) < 0.25) {
+      candidateIndices.push(i);
     }
   }
-  if (bestCandidateIndex !== -1) {
-    starToFollowIndex = bestCandidateIndex;
+  if (candidateIndices.length > 0) {
+    // Pick a random candidate from the middle of the speed range
+    candidateIndices.sort((a, b) => starVelocities[a].length() - starVelocities[b].length());
+    const mid = Math.floor(candidateIndices.length / 2);
+    starToFollowIndex = candidateIndices[mid];
   } else {
     // fallback: pick any star with v.z > 0
     for (let i = 0; i < starVelocities.length; i++) {
@@ -179,7 +202,8 @@ function init() {
   }
   starToFollow = starMeshes[starToFollowIndex];
 
-  cameraFollowStartTime = performance.now();
+  animationStartTime = performance.now();
+  cameraFollowStartTime = null; // Will be set after delay
 
   createPlanetarySystem();
 
@@ -223,9 +247,27 @@ function animate() {
   }
 
   // --- CAMERA LOGIC: follow the planet, keep star in view ---
-  if (shouldFollowStar && planetMesh && starToFollow && starToFollowIndex !== null && cameraFollowStartTime !== null) {
+  // Wait for the explosion delay before starting zoom
+  if (shouldFollowStar && planetMesh && starToFollow && starToFollowIndex !== null) {
+    if (cameraFollowStartTime === null && animationStartTime !== null) {
+      if (performance.now() - animationStartTime >= CAMERA_ZOOM_DELAY_MS) {
+        cameraFollowStartTime = performance.now();
+        // Store the camera's current lookAt target as the initial look target for smooth interpolation
+        // Calculate the current lookAt target based on camera direction and distance to planet
+        const planetPos = planetMesh.position.clone();
+        const camDir = new THREE.Vector3();
+        camera.getWorldDirection(camDir);
+        // Project from camera position in its current direction to the distance of the planet
+        const camToPlanet = planetPos.clone().sub(camera.position);
+        const projLength = camToPlanet.dot(camDir);
+        initialLookTarget = camera.position.clone().add(camDir.multiplyScalar(projLength));
+      }
+    }
+  }
+  if (shouldFollowStar && planetMesh && starToFollow && starToFollowIndex !== null && cameraFollowStartTime !== null && initialLookTarget) {
     let elapsedMs = Math.min(performance.now() - cameraFollowStartTime, cameraZoomDurationMs);
     let t = elapsedMs / cameraZoomDurationMs;
+    t = customEase(t); // apply slower ease-in and smooth ease-out
     let minOffsetZ = cameraFinalOffsetZ;
     let minLerp = 0.002;
     let maxLerp = 0.25;
@@ -235,8 +277,8 @@ function animate() {
     // Offset: camera looks at planet, but is positioned slightly behind the star, so both are in view
     const starPos = starToFollow.position;
     const planetPos = planetMesh.position;
-    // Direction from camera to planet
-    let targetLook = planetPos.clone();
+    // Gradually interpolate lookAt from the initial look target to the planet
+    let lookTarget = initialLookTarget.clone().lerp(planetPos, t);
     // Camera position: between star and planet, but closer to planet
     let camTargetPos = starPos.clone().lerp(planetPos, 1.18); // 1.18 puts camera just beyond the planet
     // Smoothly interpolate camera position
@@ -256,7 +298,7 @@ function animate() {
     let predictedPlanetZ = planetZ + planetVelZ * nFramesToEpsilon;
     let predictiveTargetZ = predictedPlanetZ + minOffsetZ;
     camera.position.z += (predictiveTargetZ - camera.position.z) * lerp;
-    camera.lookAt(targetLook);
+    camera.lookAt(lookTarget);
   }
 
   renderer.render(scene, camera);
