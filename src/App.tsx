@@ -1,35 +1,93 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useState } from "react";
+import StarfieldAnimation from "./StarfieldAnimation";
 
 function App() {
-  const [count, setCount] = useState(0)
+	const [restartKey, setRestartKey] = useState(0);
+	const [exportFrames, setExportFrames] = useState<
+		null | (() => Promise<void>)
+	>(null);
 
-  return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+	const handleSetExportFrames = (cb: () => Promise<void>) => {
+		setExportFrames(() => cb);
+	};
+
+	const handleExportFrames = async () => {
+		if (exportFrames) {
+			await exportFrames();
+		}
+	};
+
+	return (
+		<div
+			style={{
+				minHeight: "100vh",
+				display: "flex",
+				flexDirection: "column",
+				alignItems: "center",
+				justifyContent: "center",
+				background: "#181a1b",
+			}}
+		>
+			<div style={{ display: "flex", gap: 16, margin: "32px 0 24px 0" }}>
+				<button
+					onClick={() => setRestartKey((k) => k + 1)}
+					style={{
+						padding: "0.7em 2.2em",
+						fontSize: "1.2em",
+						fontWeight: 600,
+						borderRadius: 8,
+						border: "1px solid #333",
+						background: "linear-gradient(90deg, #232526 0%, #414345 100%)",
+						color: "#fff",
+						boxShadow: "0 2px 8px #0004",
+						cursor: "pointer",
+						letterSpacing: 1,
+					}}
+					type="button"
+				>
+					Restart Animation
+				</button>
+				<button
+					onClick={handleExportFrames}
+					style={{
+						padding: "0.7em 2.2em",
+						fontSize: "1.2em",
+						fontWeight: 600,
+						borderRadius: 8,
+						border: "1px solid #333",
+						background: "linear-gradient(90deg, #232526 0%, #414345 100%)",
+						color: "#fff",
+						boxShadow: "0 2px 8px #0004",
+						cursor: "pointer",
+						letterSpacing: 1,
+					}}
+					type="button"
+				>
+					Export Frames (ZIP)
+				</button>
+			</div>
+			<div
+				style={{
+					width: "70vw",
+					maxWidth: 1100,
+					aspectRatio: "16 / 9",
+					background: "#111",
+					borderRadius: 16,
+					overflow: "hidden",
+					boxShadow: "0 4px 32px #000a",
+					border: "1px solid #222",
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "center",
+				}}
+			>
+				<StarfieldAnimation
+					key={restartKey}
+					onExportFrames={handleSetExportFrames}
+				/>
+			</div>
+		</div>
+	);
 }
 
-export default App
+export default App;
