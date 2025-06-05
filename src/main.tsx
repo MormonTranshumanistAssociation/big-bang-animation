@@ -278,7 +278,8 @@ function animate() {
     const starPos = starToFollow.position;
     const planetPos = planetMesh.position;
     // Gradually interpolate lookAt from the initial look target to the planet
-    let lookTarget = initialLookTarget.clone().lerp(planetPos, t);
+    let lookTargetLerpT = Math.min(elapsedMs / 500, 1); // lock look target within 500ms
+    let lookTarget = initialLookTarget.clone().lerp(planetPos, lookTargetLerpT);
     // Camera position: between star and planet, but closer to planet
     let camTargetPos = starPos.clone().lerp(planetPos, 1.18); // 1.18 puts camera just beyond the planet
     // Smoothly interpolate camera position
