@@ -50,7 +50,7 @@ const subtleWhiteTintRamp = `
 // --- PLANET & MOON SYSTEM ---
 let planetMesh: THREE.Mesh, moonMesh: THREE.Mesh;
 let planetDistanceFromStar = 4.5; // much closer to the star, inside the blast radius
-let moonDistanceFromPlanet = 4.5; // closer to the planet
+let moonDistanceFromPlanet = 0.4; // further from the now much smaller planet
 let moonOrbitSpeed = 0.08; // radians per second, very slow
 let moonOrbitAngle = 0;
 let starLight: THREE.PointLight;
@@ -81,7 +81,7 @@ function customEase(t: number): number {
 
 function createPlanetarySystem() {
   // Earth-like planet
-  const planetGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+  const planetGeometry = new THREE.SphereGeometry(0.05, 32, 32);
   const planetMaterial = new THREE.MeshPhongMaterial({
     color: 0x3a6ea5, // blue-ish
     specular: 0x222222,
@@ -92,7 +92,7 @@ function createPlanetarySystem() {
   scene.add(planetMesh);
 
   // Moon
-  const moonGeometry = new THREE.SphereGeometry(0.13, 24, 24);
+  const moonGeometry = new THREE.SphereGeometry(0.013, 24, 24);
   const moonMaterial = new THREE.MeshPhongMaterial({
     color: 0xbababa,
     specular: 0x111111,
@@ -311,7 +311,7 @@ function animate() {
       // Apply 10th-power ease-out for maximum dramatic deceleration
       landingT = 1 - Math.pow(1 - landingT, 10);
       const planetRadius = 0.5;
-      const landingOffset = planetRadius * 6.0;
+      const landingOffset = planetRadius * 0.7;
       if (!landingStarted) {
         // Store camera and direction at the start of landing
         landingStartCameraPos = camera.position.clone();
