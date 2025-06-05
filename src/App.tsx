@@ -6,6 +6,7 @@ function App() {
 	const [exportFrames, setExportFrames] = useState<
 		null | (() => Promise<void>)
 	>(null);
+	const [exporting, setExporting] = useState(false);
 
 	const handleSetExportFrames = (cb: () => Promise<void>) => {
 		setExportFrames(() => cb);
@@ -13,7 +14,12 @@ function App() {
 
 	const handleExportFrames = async () => {
 		if (exportFrames) {
-			await exportFrames();
+			setExporting(true);
+			try {
+				await exportFrames();
+			} finally {
+				setExporting(false);
+			}
 		}
 	};
 
@@ -49,6 +55,7 @@ function App() {
 				</button>
 				<button
 					onClick={handleExportFrames}
+					disabled={exporting}
 					style={{
 						padding: "0.7em 2.2em",
 						fontSize: "1.2em",
@@ -58,12 +65,31 @@ function App() {
 						background: "linear-gradient(90deg, #232526 0%, #414345 100%)",
 						color: "#fff",
 						boxShadow: "0 2px 8px #0004",
-						cursor: "pointer",
+						cursor: exporting ? "not-allowed" : "pointer",
 						letterSpacing: 1,
+						opacity: exporting ? 0.6 : 1,
 					}}
 					type="button"
 				>
-					Export Frames (ZIP)
+					{exporting ? (
+						<span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+							<span
+								className="spinner"
+								style={{
+									width: 18,
+									height: 18,
+									border: "3px solid #fff",
+									borderTop: "3px solid #888",
+									borderRadius: "50%",
+									display: "inline-block",
+									animation: "spin 1s linear infinite",
+								}}
+							/>
+							Exporting...
+						</span>
+					) : (
+						"Export Frames (ZIP)"
+					)}
 				</button>
 			</div>
 			<div
@@ -86,6 +112,12 @@ function App() {
 					onExportFrames={handleSetExportFrames}
 				/>
 			</div>
+			<style>{`
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+`}</style>
 		</div>
 	);
 }
