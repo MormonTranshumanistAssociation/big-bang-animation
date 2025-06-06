@@ -34,7 +34,7 @@ export class StarfieldCore {
 	public landingTargetPos: THREE.Vector3 | null = null;
 	public landingStartLookTarget: THREE.Vector3 | null = null;
 	public landingStarted = false;
-	public readonly TOTAL_STAR_COUNT = 5000;
+	public readonly TOTAL_STAR_COUNT = 10000;
 	public readonly CAMERA_ZOOM_DELAY_MS = 1000;
 	public readonly cameraZoomDurationMs = 4000;
 	public readonly cameraFinalOffsetZ = 10;
