@@ -1,6 +1,29 @@
 // Abstraction for starfield animation logic, shared by both the web component and export routine
 import * as THREE from "three";
 
+type GalaxyType =
+	| "spiral"
+	| "elliptical"
+	| "seyfert"
+	| "lenticular"
+	| "irregular";
+interface GalaxyParams {
+	type: GalaxyType;
+	size: number;
+	spread: number;
+	orientation: number;
+	armCount?: number; // for spiral
+	armTwist?: number; // for spiral
+	bulge?: number; // for spiral
+	axisRatio?: number; // for elliptical, lenticular
+	fuzziness?: number; // for elliptical, seyfert
+	coreStrength?: number; // for seyfert
+	irregularSeed?: number; // for irregular
+	colorShift: number;
+	galaxyColor: [number, number, number];
+	material: THREE.ShaderMaterial;
+}
+
 export interface StarfieldCoreOptions {
 	width: number;
 	height: number;
@@ -47,9 +70,24 @@ export class StarfieldCore {
 	public readonly customEase: (t: number) => number;
 	public readonly easeInCubic: (t: number) => number;
 	public readonly easeOutCubic: (t: number) => number;
-	public shouldFollowStar = true;
+	public shouldFollowStar = false;
 	public forExport = false;
 	public onFrame?: (frame: number, now: number) => void;
+	public galaxyParams: (GalaxyParams | null)[] = [];
+	private spiralGalaxyShader: { vertexShader: string; fragmentShader: string };
+	private ellipticalGalaxyShader: {
+		vertexShader: string;
+		fragmentShader: string;
+	};
+	private seyfertGalaxyShader: { vertexShader: string; fragmentShader: string };
+	private lenticularGalaxyShader: {
+		vertexShader: string;
+		fragmentShader: string;
+	};
+	private irregularGalaxyShader: {
+		vertexShader: string;
+		fragmentShader: string;
+	};
 
 	constructor(options: StarfieldCoreOptions) {
 		this.scene = options.scene || new THREE.Scene();
@@ -89,6 +127,169 @@ export class StarfieldCore {
 			}
 			return 0.5 + 0.5 * this.easeOutCubic((t - 0.6) / 0.4);
 		};
+		this.spiralGalaxyShader = {
+			vertexShader: `
+				varying vec2 vUv;
+				void main() {
+					vUv = uv - 0.5;
+					gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+				}
+			`,
+			fragmentShader: `
+				varying vec2 vUv;
+				uniform float size;
+				uniform float spread;
+				uniform float orientation;
+				uniform float armCount;
+				uniform float armTwist;
+				uniform float bulge;
+				uniform float colorShift;
+				uniform vec3 galaxyColor;
+				${this.subtleWhiteTintRamp}
+				void main() {
+					float s = sin(orientation);
+					float c = cos(orientation);
+					vec2 uvRot = vec2(c * vUv.x - s * vUv.y, s * vUv.x + c * vUv.y);
+					float angle = atan(uvRot.y, uvRot.x);
+					float radius = length(uvRot) * 4.0 / size;
+					float arms = pow(abs(sin(angle * armCount + radius * armTwist)), 1.5);
+					float spiral = exp(-radius * spread) * (0.7 + 0.5 * arms);
+					float core = smoothstep(0.18, 0.05, radius);
+					float bulgeGlow = exp(-radius * bulge);
+					float t = clamp(radius, 0.0, 1.0);
+					vec3 rampColor = subtleWhiteTint(t, colorShift);
+					vec3 color = mix(galaxyColor, rampColor, 0.5);
+					float alpha = max(core, max(bulgeGlow * 0.7, spiral * 0.8));
+					float fade = pow(smoothstep(0.7, 0.3, radius), 1.5);
+					float mask = 1.0 - smoothstep(0.35, 0.5, length(vUv));
+					alpha *= fade * mask;
+					gl_FragColor = vec4(color, alpha * 0.9);
+				}
+			`,
+		};
+		this.ellipticalGalaxyShader = {
+			vertexShader: this.spiralGalaxyShader.vertexShader,
+			fragmentShader: `
+				varying vec2 vUv;
+				uniform float size;
+				uniform float axisRatio;
+				uniform float orientation;
+				uniform float fuzziness;
+				uniform float colorShift;
+				uniform vec3 galaxyColor;
+				${this.subtleWhiteTintRamp}
+				void main() {
+					float s = sin(orientation);
+					float c = cos(orientation);
+					vec2 uvRot = vec2(c * vUv.x - s * vUv.y, s * vUv.x + c * vUv.y);
+					float ellipse = length(vec2(uvRot.x / axisRatio, uvRot.y)) * 4.0 / size;
+					float core = smoothstep(0.18, 0.05, ellipse);
+					float halo = exp(-ellipse * fuzziness);
+					float t = clamp(ellipse, 0.0, 1.0);
+					vec3 rampColor = subtleWhiteTint(t, colorShift);
+					vec3 color = mix(galaxyColor, rampColor, 0.5);
+					float alpha = max(core, halo * 0.7);
+					float fade = pow(smoothstep(0.7, 0.3, ellipse), 1.5);
+					float mask = 1.0 - smoothstep(0.35, 0.5, length(vUv));
+					alpha *= fade * mask;
+					gl_FragColor = vec4(color, alpha * 0.9);
+				}
+			`,
+		};
+		this.seyfertGalaxyShader = {
+			vertexShader: this.ellipticalGalaxyShader.vertexShader,
+			fragmentShader: `
+				varying vec2 vUv;
+				uniform float size;
+				uniform float axisRatio;
+				uniform float orientation;
+				uniform float coreStrength;
+				uniform float fuzziness;
+				uniform float colorShift;
+				uniform vec3 galaxyColor;
+				${this.subtleWhiteTintRamp}
+				void main() {
+					float s = sin(orientation);
+					float c = cos(orientation);
+					vec2 uvRot = vec2(c * vUv.x - s * vUv.y, s * vUv.x + c * vUv.y);
+					float ellipse = length(vec2(uvRot.x / axisRatio, uvRot.y)) * 4.0 / size;
+					float core = exp(-ellipse * coreStrength);
+					float disk = exp(-ellipse * fuzziness);
+					float t = clamp(ellipse, 0.0, 1.0);
+					vec3 rampColor = subtleWhiteTint(t, colorShift);
+					vec3 color = mix(galaxyColor, rampColor, 0.5);
+					float alpha = max(core, disk * 0.5);
+					float fade = pow(smoothstep(0.7, 0.3, ellipse), 1.5);
+					float mask = 1.0 - smoothstep(0.35, 0.5, length(vUv));
+					alpha *= fade * mask;
+					gl_FragColor = vec4(color, alpha * 0.9);
+				}
+			`,
+		};
+		this.lenticularGalaxyShader = {
+			vertexShader: this.ellipticalGalaxyShader.vertexShader,
+			fragmentShader: `
+				varying vec2 vUv;
+				uniform float size;
+				uniform float axisRatio;
+				uniform float orientation;
+				uniform float colorShift;
+				uniform vec3 galaxyColor;
+				${this.subtleWhiteTintRamp}
+				void main() {
+					float s = sin(orientation);
+					float c = cos(orientation);
+					vec2 uvRot = vec2(c * vUv.x - s * vUv.y, s * vUv.x + c * vUv.y);
+					float disk = length(vec2(uvRot.x / axisRatio, uvRot.y)) * 4.0 / size;
+					float diskFade = exp(-disk * 3.5);
+					float t = clamp(disk, 0.0, 1.0);
+					vec3 rampColor = subtleWhiteTint(t, colorShift);
+					vec3 color = mix(galaxyColor, rampColor, 0.5);
+					float alpha = diskFade;
+					float fade = pow(smoothstep(0.7, 0.3, disk), 1.5);
+					float mask = 1.0 - smoothstep(0.35, 0.5, length(vUv));
+					alpha *= fade * mask;
+					gl_FragColor = vec4(color, alpha * 0.9);
+				}
+			`,
+		};
+		this.irregularGalaxyShader = {
+			vertexShader: `
+				varying vec2 vUv;
+				void main() {
+					vUv = uv - 0.5;
+					gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+				}
+			`,
+			fragmentShader: `
+				varying vec2 vUv;
+				uniform float size;
+				uniform float orientation;
+				uniform float irregularSeed;
+				uniform float colorShift;
+				uniform vec3 galaxyColor;
+				${this.subtleWhiteTintRamp}
+				float hash(vec2 p) {
+					return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+				}
+				void main() {
+					float s = sin(orientation);
+					float c = cos(orientation);
+					vec2 uvRot = vec2(c * vUv.x - s * vUv.y, s * vUv.x + c * vUv.y);
+					float r = length(uvRot) * 4.0 / size;
+					float n = hash(uvRot * 7.0 + irregularSeed);
+					float blob = exp(-r * (2.0 + n * 3.0)) * (0.7 + n * 0.5);
+					float t = clamp(r, 0.0, 1.0);
+					vec3 rampColor = subtleWhiteTint(t, colorShift);
+					vec3 color = mix(galaxyColor, rampColor, 0.5);
+					float alpha = blob;
+					float fade = pow(smoothstep(0.7, 0.3, r), 1.5);
+					float mask = 1.0 - smoothstep(0.35, 0.5, length(vUv));
+					alpha *= fade * mask;
+					gl_FragColor = vec4(color, alpha * 0.9);
+				}
+			`,
+		};
 		this.init();
 	}
 
@@ -121,56 +322,196 @@ export class StarfieldCore {
 
 	private init() {
 		// Create stars
+		const galaxyTypes: GalaxyType[] = [
+			"spiral",
+			"elliptical",
+			"seyfert",
+			"lenticular",
+			"irregular",
+		];
 		for (let i = 0; i < this.TOTAL_STAR_COUNT; i++) {
 			const starGeometry = new THREE.PlaneGeometry(1.5, 1.5);
-			const starMaterial = new THREE.ShaderMaterial({
-				transparent: true,
-				depthWrite: false,
-				uniforms: {
-					glowStrength: { value: 2.2 },
-					colorShift: { value: Math.random() },
-				},
-				vertexShader: `
-          varying vec2 vUv;
-          void main() {
-            vUv = uv - 0.5;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-				fragmentShader: `
-          varying vec2 vUv;
-          uniform float glowStrength;
-          uniform float colorShift;
-          ${this.subtleWhiteTintRamp}
-          void main() {
-            float dist = length(vUv) * 2.0;
-            float core = smoothstep(0.13, 0.07, dist);
-            float glow = exp(-dist * (glowStrength * 1.7)) * 0.7;
-            float t = clamp(dist, 0.0, 1.0);
-            vec3 color = subtleWhiteTint(t, colorShift);
-            float blend = smoothstep(0.0, 0.45, 1.0 - dist);
-            vec3 finalColor = mix(color * glow, color, blend);
-            float alpha = max(core, glow * 0.5);
-            gl_FragColor = vec4(finalColor, alpha);
-          }
-        `,
-			});
-			const starMesh = new THREE.Mesh(starGeometry, starMaterial);
-			starMesh.position.set(0, 0, 0);
-			this.scene.add(starMesh);
-			this.starMeshes.push(starMesh);
 			const theta = Math.random() * 2 * Math.PI;
 			const phi = Math.acos(2 * Math.random() - 1);
 			const speed =
 				this.STAR_SPEED_MIN +
 				Math.random() * (this.STAR_SPEED_MAX - this.STAR_SPEED_MIN);
-			this.starVelocities.push(
-				new THREE.Vector3(
-					Math.sin(phi) * Math.cos(theta) * speed,
-					Math.sin(phi) * Math.sin(theta) * speed,
-					Math.cos(phi) * speed,
-				),
+			const velocity = new THREE.Vector3(
+				Math.sin(phi) * Math.cos(theta) * speed,
+				Math.sin(phi) * Math.sin(theta) * speed,
+				Math.cos(phi) * speed,
 			);
+			this.starVelocities.push(velocity);
+			// Always assign a random galaxy type
+			const type: GalaxyType =
+				galaxyTypes[Math.floor(Math.random() * galaxyTypes.length)];
+			const size = 2.5 + Math.random() * 4.5;
+			const spread = 1.0 + Math.random() * 3.0;
+			const orientation = Math.random() * Math.PI * 2;
+			const colorShift = Math.random();
+			const galaxyColor = this.pickGalaxyColor(type);
+			if (type === "spiral") {
+				const armCount = 2 + Math.floor(Math.random() * 4);
+				const armTwist = 2.0 + Math.random() * 6.0;
+				const bulge = 1.0 + Math.random() * 2.5;
+				const material = new THREE.ShaderMaterial({
+					transparent: true,
+					depthWrite: false,
+					uniforms: {
+						size: { value: size },
+						spread: { value: spread },
+						orientation: { value: orientation },
+						armCount: { value: armCount },
+						armTwist: { value: armTwist },
+						bulge: { value: bulge },
+						colorShift: { value: colorShift },
+						galaxyColor: { value: new THREE.Color(...galaxyColor) },
+					},
+					vertexShader: this.spiralGalaxyShader.vertexShader,
+					fragmentShader: this.spiralGalaxyShader.fragmentShader,
+				});
+				this.galaxyParams.push({
+					type,
+					size,
+					spread,
+					orientation,
+					armCount,
+					armTwist,
+					bulge,
+					colorShift,
+					galaxyColor,
+					material,
+				});
+				const mesh = new THREE.Mesh(starGeometry, material);
+				mesh.position.set(0, 0, 0);
+				this.scene.add(mesh);
+				this.starMeshes.push(mesh);
+			} else if (type === "elliptical") {
+				const axisRatio = 0.2 + Math.random() * 0.7;
+				const fuzziness = 1.5 + Math.random() * 2.5;
+				const material = new THREE.ShaderMaterial({
+					transparent: true,
+					depthWrite: false,
+					uniforms: {
+						size: { value: size },
+						axisRatio: { value: axisRatio },
+						orientation: { value: orientation },
+						fuzziness: { value: fuzziness },
+						colorShift: { value: colorShift },
+						galaxyColor: { value: new THREE.Color(...galaxyColor) },
+					},
+					vertexShader: this.ellipticalGalaxyShader.vertexShader,
+					fragmentShader: this.ellipticalGalaxyShader.fragmentShader,
+				});
+				this.galaxyParams.push({
+					type,
+					size,
+					spread,
+					orientation,
+					axisRatio,
+					fuzziness,
+					colorShift,
+					galaxyColor,
+					material,
+				});
+				const mesh = new THREE.Mesh(starGeometry, material);
+				mesh.position.set(0, 0, 0);
+				this.scene.add(mesh);
+				this.starMeshes.push(mesh);
+			} else if (type === "seyfert") {
+				const axisRatio = 0.5 + Math.random() * 0.4;
+				const coreStrength = 4.0 + Math.random() * 4.0;
+				const fuzziness = 1.5 + Math.random() * 2.0;
+				const material = new THREE.ShaderMaterial({
+					transparent: true,
+					depthWrite: false,
+					uniforms: {
+						size: { value: size },
+						axisRatio: { value: axisRatio },
+						orientation: { value: orientation },
+						coreStrength: { value: coreStrength },
+						fuzziness: { value: fuzziness },
+						colorShift: { value: colorShift },
+						galaxyColor: { value: new THREE.Color(...galaxyColor) },
+					},
+					vertexShader: this.seyfertGalaxyShader.vertexShader,
+					fragmentShader: this.seyfertGalaxyShader.fragmentShader,
+				});
+				this.galaxyParams.push({
+					type,
+					size,
+					spread,
+					orientation,
+					axisRatio,
+					coreStrength,
+					fuzziness,
+					colorShift,
+					galaxyColor,
+					material,
+				});
+				const mesh = new THREE.Mesh(starGeometry, material);
+				mesh.position.set(0, 0, 0);
+				this.scene.add(mesh);
+				this.starMeshes.push(mesh);
+			} else if (type === "lenticular") {
+				const axisRatio = 0.15 + Math.random() * 0.25;
+				const material = new THREE.ShaderMaterial({
+					transparent: true,
+					depthWrite: false,
+					uniforms: {
+						size: { value: size },
+						axisRatio: { value: axisRatio },
+						orientation: { value: orientation },
+						colorShift: { value: colorShift },
+						galaxyColor: { value: new THREE.Color(...galaxyColor) },
+					},
+					vertexShader: this.lenticularGalaxyShader.vertexShader,
+					fragmentShader: this.lenticularGalaxyShader.fragmentShader,
+				});
+				this.galaxyParams.push({
+					type,
+					size,
+					spread,
+					orientation,
+					axisRatio,
+					colorShift,
+					galaxyColor,
+					material,
+				});
+				const mesh = new THREE.Mesh(starGeometry, material);
+				mesh.position.set(0, 0, 0);
+				this.scene.add(mesh);
+				this.starMeshes.push(mesh);
+			} else if (type === "irregular") {
+				const irregularSeed = Math.random() * 1000.0;
+				const material = new THREE.ShaderMaterial({
+					transparent: true,
+					depthWrite: false,
+					uniforms: {
+						size: { value: size },
+						orientation: { value: orientation },
+						irregularSeed: { value: irregularSeed },
+						colorShift: { value: colorShift },
+						galaxyColor: { value: new THREE.Color(...galaxyColor) },
+					},
+					vertexShader: this.irregularGalaxyShader.vertexShader,
+					fragmentShader: this.irregularGalaxyShader.fragmentShader,
+				});
+				this.galaxyParams.push({
+					type,
+					size,
+					spread,
+					orientation,
+					irregularSeed,
+					colorShift,
+					galaxyColor,
+					material,
+				});
+				const mesh = new THREE.Mesh(starGeometry, material);
+				mesh.position.set(0, 0, 0);
+				this.scene.add(mesh);
+				this.starMeshes.push(mesh);
+			}
 		}
 		// Find star to follow
 		const candidateIndices: number[] = [];
@@ -307,135 +648,53 @@ export class StarfieldCore {
 			}
 		}
 		// --- CAMERA LOGIC ---
-		if (
-			this.shouldFollowStar &&
-			this.planetMesh &&
-			this.starToFollow &&
-			this.starToFollowIndex !== null
-		) {
-			if (
-				this.cameraFollowStartTime === null &&
-				this.animationStartTime !== null
-			) {
-				if (now - this.animationStartTime >= this.CAMERA_ZOOM_DELAY_MS) {
-					this.cameraFollowStartTime = now;
-					const planetPos = (
-						this.planetMesh as THREE.Mesh<
-							THREE.BufferGeometry,
-							THREE.Material | THREE.Material[]
-						>
-					).position.clone();
-					const camDir = new THREE.Vector3();
-					this.camera.getWorldDirection(camDir);
-					const camToPlanet = planetPos.clone().sub(this.camera.position);
-					const projLength = camToPlanet.dot(camDir);
-					this.initialLookTarget = this.camera.position
-						.clone()
-						.add(camDir.multiplyScalar(projLength));
-				}
-			}
-		}
-		if (
-			this.shouldFollowStar &&
-			this.planetMesh &&
-			this.starToFollow &&
-			this.starToFollowIndex !== null &&
-			this.cameraFollowStartTime !== null &&
-			this.initialLookTarget
-		) {
-			const elapsedMs = Math.min(
-				now - this.cameraFollowStartTime,
-				this.cameraZoomDurationMs,
-			);
-			let t = elapsedMs / this.cameraZoomDurationMs;
-			t = t ** 4;
-			const minOffsetZ = this.cameraFinalOffsetZ;
-			const minLerp = 0.002;
-			const maxLerp = 0.25;
-			let xyLerp = minLerp + (maxLerp - minLerp) * t;
-			xyLerp = Math.min(xyLerp, 0.08);
-			const starPos = this.starToFollow.position;
-			const planetPos = (
-				this.planetMesh as THREE.Mesh<
-					THREE.BufferGeometry,
-					THREE.Material | THREE.Material[]
-				>
-			).position;
-			const lookTarget = this.initialLookTarget.clone().lerp(planetPos, xyLerp);
-			const camTargetPos = starPos.clone().lerp(planetPos, 1.18);
-			const landingDurationMs = 1500;
-			const landingStartMs = this.cameraZoomDurationMs - landingDurationMs;
-			if (elapsedMs >= landingStartMs) {
-				let landingT = (elapsedMs - landingStartMs) / landingDurationMs;
-				landingT = Math.min(Math.max(landingT, 0), 1);
-				landingT = 1 - (1 - landingT) ** 10;
-				const planetRadius = 0.5;
-				const landingOffset = planetRadius * 0.7;
-				if (!this.landingStarted) {
-					this.landingStartCameraPos = this.camera.position.clone();
-					const landingDir = planetPos
-						.clone()
-						.sub(this.camera.position)
-						.normalize();
-					this.landingTargetPos = landingDir;
-					const camDir = new THREE.Vector3();
-					this.camera.getWorldDirection(camDir);
-					this.landingStartLookTarget = this.camera.position
-						.clone()
-						.add(camDir);
-					this.landingStarted = true;
-				}
-				if (this.landingStartCameraPos && this.landingTargetPos) {
-					if (landingT < 1) {
-						const currentLandingTarget = planetPos
-							.clone()
-							.sub(this.landingTargetPos.clone().multiplyScalar(landingOffset));
-						this.camera.position.copy(
-							this.landingStartCameraPos
-								.clone()
-								.lerp(currentLandingTarget, landingT),
-						);
-						if (this.landingStartLookTarget) {
-							const easedLookTarget = this.landingStartLookTarget
-								.clone()
-								.lerp(planetPos, landingT);
-							this.camera.lookAt(easedLookTarget);
-						} else {
-							this.camera.lookAt(planetPos);
-						}
-					} else {
-						const currentLandingTarget = planetPos
-							.clone()
-							.sub(this.landingTargetPos.clone().multiplyScalar(landingOffset));
-						this.camera.position.copy(currentLandingTarget);
-						this.camera.lookAt(planetPos);
-					}
-				}
-			} else {
-				this.landingStarted = false;
-				this.camera.position.x +=
-					(camTargetPos.x - this.camera.position.x) * xyLerp;
-				this.camera.position.y +=
-					(camTargetPos.y - this.camera.position.y) * xyLerp;
-				const lerp = xyLerp;
-				const cameraZ = this.camera.position.z;
-				const planetZ = planetPos.z;
-				const planetVelZ = this.starVelocities[this.starToFollowIndex].z;
-				const epsilon = 0.01;
-				const targetZ = planetZ + minOffsetZ;
-				let nFramesToEpsilon =
-					Math.log(epsilon / Math.abs(targetZ - cameraZ)) / Math.log(1 - lerp);
-				if (!Number.isFinite(nFramesToEpsilon) || nFramesToEpsilon < 0)
-					nFramesToEpsilon = 0;
-				const maxPredictionFrames = 15;
-				nFramesToEpsilon = Math.min(nFramesToEpsilon, maxPredictionFrames);
-				const predictedPlanetZ = planetZ + planetVelZ * nFramesToEpsilon;
-				const predictiveTargetZ = predictedPlanetZ + minOffsetZ;
-				this.camera.position.z +=
-					(predictiveTargetZ - this.camera.position.z) * lerp;
-				this.camera.lookAt(lookTarget);
-			}
-		}
 		this.renderer.render(this.scene, this.camera);
+	}
+
+	private pickGalaxyColor(type: GalaxyType): [number, number, number] {
+		if (type === "spiral") {
+			// Blue, white, or yellowish
+			const palette: [number, number, number][] = [
+				[0.7, 0.8, 1.0], // blue-white
+				[1.0, 0.95, 0.7], // yellow-white
+				[1.0, 1.0, 1.0], // white
+				[0.8, 0.9, 1.0], // pale blue
+			];
+			return palette[Math.floor(Math.random() * palette.length)];
+		}
+		if (type === "elliptical") {
+			// Yellow/orange
+			const palette: [number, number, number][] = [
+				[1.0, 0.9, 0.7],
+				[1.0, 0.85, 0.6],
+				[1.0, 0.8, 0.5],
+			];
+			return palette[Math.floor(Math.random() * palette.length)];
+		}
+		if (type === "seyfert") {
+			// Blue, yellow, or white
+			const palette: [number, number, number][] = [
+				[0.7, 0.8, 1.0],
+				[1.0, 0.95, 0.7],
+				[1.0, 1.0, 1.0],
+			];
+			return palette[Math.floor(Math.random() * palette.length)];
+		}
+		if (type === "lenticular") {
+			// White/yellow
+			const palette: [number, number, number][] = [
+				[1.0, 0.95, 0.7],
+				[1.0, 1.0, 1.0],
+			];
+			return palette[Math.floor(Math.random() * palette.length)];
+		}
+		// Irregular: blue, pink, or mixed
+		const palette: [number, number, number][] = [
+			[0.7, 0.8, 1.0], // blue
+			[1.0, 0.7, 0.9], // pink
+			[0.9, 1.0, 1.0], // pale blue-white
+			[1.0, 0.9, 0.7], // yellowish
+		];
+		return palette[Math.floor(Math.random() * palette.length)];
 	}
 }
