@@ -513,49 +513,54 @@ export class StarfieldCore {
 				this.starMeshes.push(mesh);
 			}
 		}
-		// Find star to follow
-		const candidateIndices: number[] = [];
+
+		// --- New logic: Find the star whose velocity vector passes closest to the camera's z=400 plane ---
+		let bestIndex = 0;
+		let minDist = Number.POSITIVE_INFINITY;
+		const cameraZ = 400;
 		for (let i = 0; i < this.starVelocities.length; i++) {
 			const v = this.starVelocities[i];
-			if (v.z > 0.15 && Math.abs(v.x) < 0.25 && Math.abs(v.y) < 0.25) {
-				candidateIndices.push(i);
+			if (v.z <= 0.01) continue; // Only consider stars moving toward +z
+			// The star starts at (0,0,0) and moves along v. Find t where z=400: 0 + v.z * t = 400 => t = 400/v.z
+			const t = cameraZ / v.z;
+			if (t < 0) continue;
+			const xAtCam = v.x * t;
+			const yAtCam = v.y * t;
+			const dist = Math.sqrt(xAtCam * xAtCam + yAtCam * yAtCam);
+			if (dist < minDist) {
+				minDist = dist;
+				bestIndex = i;
 			}
 		}
-		if (candidateIndices.length > 0) {
-			candidateIndices.sort(
-				(a, b) =>
-					this.starVelocities[a].length() - this.starVelocities[b].length(),
-			);
-			const mid = Math.floor(candidateIndices.length / 2);
-			this.starToFollowIndex = candidateIndices[mid];
-		} else {
-			for (let i = 0; i < this.starVelocities.length; i++) {
-				if (this.starVelocities[i].z > 0) {
-					this.starToFollowIndex = i;
-					break;
-				}
-			}
-			if (this.starToFollowIndex === null) {
-				this.starToFollowIndex = 0;
-			}
-		}
-		if (
-			this.starToFollowIndex !== null &&
-			this.starMeshes[this.starToFollowIndex]
-		) {
-			this.starToFollow = this.starMeshes[this.starToFollowIndex];
-			this.starInitialVelocity = this.starVelocities[this.starToFollowIndex]
-				.clone()
-				.normalize();
-			const sideOffset = new THREE.Vector3()
-				.crossVectors(this.starInitialVelocity, new THREE.Vector3(0, 0, 1))
-				.normalize()
-				.multiplyScalar(3);
-			this.planetFinalDestination = this.starInitialVelocity
-				.clone()
-				.multiplyScalar(this.planetDistanceFromStar)
-				.add(sideOffset);
-		}
+		this.starToFollowIndex = bestIndex;
+		this.starToFollow = this.starMeshes[bestIndex];
+		// Set the selected star's speed to just below the maximum
+		const maxSpeed = this.STAR_SPEED_MAX - 0.01;
+		const vOrig = this.starVelocities[bestIndex];
+		const vNorm = vOrig.clone().normalize();
+		this.starVelocities[bestIndex] = vNorm.multiplyScalar(maxSpeed);
+		this.starInitialVelocity = this.starVelocities[bestIndex]
+			.clone()
+			.normalize();
+
+		// Set camera x/y to intersection point, keep z=400, look at origin
+		const v = this.starVelocities[bestIndex];
+		const t = cameraZ / v.z;
+		this.camera.position.x = v.x * t;
+		this.camera.position.y = v.y * t;
+		this.camera.position.z = cameraZ;
+		this.camera.lookAt(0, 0, 0);
+
+		// --- End new logic ---
+
+		const sideOffset = new THREE.Vector3()
+			.crossVectors(this.starInitialVelocity, new THREE.Vector3(0, 0, 1))
+			.normalize()
+			.multiplyScalar(3);
+		this.planetFinalDestination = this.starInitialVelocity
+			.clone()
+			.multiplyScalar(this.planetDistanceFromStar)
+			.add(sideOffset);
 		this.animationStartTime = this.forExport ? 0 : performance.now();
 		this.cameraFollowStartTime = null;
 		this.createPlanetarySystem();
